@@ -1,0 +1,113 @@
+plugins {
+    id 'java'
+}
+
+dependencies {
+    implementation 'one.xis:xis-boot-native'
+    implementation 'one.xis:xis-sql'
+    implementation 'one.xis:xis-boot-native-h2'
+    implementation project(':lib')
+
+    testImplementation 'org.assertj:assertj-core:3.25.3'
+}
+
+tasks.register('runNativeCatalogTestApp', JavaExec) {
+    group = 'application'
+    description = 'Runs the generated XIS Boot native-catalog test application on the JVM.'
+    dependsOn classes
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'one.xis.boot.nativeimage.NativeRunner'
+    args = [findProperty('port') ?: '8097']
+}
+
+tasks.register('nativeCatalogE2e') {
+    group = 'verification'
+    description = 'Builds the native executable, starts it, and verifies the XIS page model through HTTP.'
+    dependsOn tasks.named('xisNativeCompile')
+
+    def executableFile = layout.buildDirectory.file("native/${project.name}")
+    def port = (findProperty('nativeE2ePort') ?: '8098') as int
+
+    doLast {
+        var executable = executableFile.get().asFile
+        if (!executable.exists()) {
+            throw new GradleException("Native executable not found: ${executable}")
+        }
+
+        var outputFile = layout.buildDirectory.file('native/native-catalog-e2e.log').get().asFile
+        outputFile.parentFile.mkdirs()
+        var process = new ProcessBuilder(executable.absolutePath, String.valueOf(port))
+                .redirectErrorStream(true)
+                .redirectOutput(ProcessBuilder.Redirect.to(outputFile))
+                .start()
+        try {
+            waitForNativeServer(process, port, outputFile)
+            var skeleton = httpGet("http://localhost:${port}/")
+            if (!skeleton.contains('XIS Native Catalog Test')) {
+                throw new GradleException("Native skeleton page did not load. Response was: ${skeleton}")
+            }
+            var bundle = httpGet("http://localhost:${port}/bundle.min.js")
+            if (!bundle.contains('class ClientRequest')) {
+                throw new GradleException("Native JavaScript bundle did not load.")
+            }
+            var model = httpPostJson("http://localhost:${port}/xis/page/model", """
+                    {
+                      "clientId": "native-e2e",
+                      "pageId": "/native-catalog.html",
+                      "pageUrl": "/native-catalog.html",
+                      "zoneId": "Europe/Berlin",
+                      "type": "page"
+                    }
+                    """)
+            if (!model.contains('native boot catalog works via bean service and h2 sql and library component from maven local')) {
+                throw new GradleException("Native model endpoint did not return SQL-backed page data. Response was: ${model}")
+            }
+        } finally {
+            process.destroy()
+            if (!process.waitFor(3, java.util.concurrent.TimeUnit.SECONDS)) {
+                process.destroyForcibly()
+                process.waitFor()
+            }
+        }
+    }
+}
+
+private static void waitForNativeServer(Process process, int port, File logFile) {
+    var deadline = System.currentTimeMillis() + 15_000
+    while (System.currentTimeMillis() < deadline) {
+        if (!process.isAlive()) {
+            throw new GradleException("Native server exited before it was reachable. Log:\n${logFile.text}")
+        }
+        try {
+            httpGet("http://localhost:${port}/")
+            return
+        } catch (IOException ignored) {
+            Thread.sleep(200)
+        }
+    }
+    throw new GradleException("Native server did not become reachable on port ${port}. Log:\n${logFile.text}")
+}
+
+private static String httpGet(String url) {
+    var connection = new URL(url).openConnection()
+    connection.setConnectTimeout(2_000)
+    connection.setReadTimeout(5_000)
+    return connection.inputStream.getText('UTF-8')
+}
+
+private static String httpPostJson(String url, String json) {
+    var connection = (HttpURLConnection) new URL(url).openConnection()
+    connection.setRequestMethod('POST')
+    connection.setRequestProperty('Content-Type', 'application/json; charset=UTF-8')
+    connection.setConnectTimeout(2_000)
+    connection.setReadTimeout(5_000)
+    connection.doOutput = true
+    connection.outputStream.withWriter('UTF-8') { writer -> writer << json }
+    var status = connection.responseCode
+    var stream = status >= 400 ? connection.errorStream : connection.inputStream
+    var response = stream == null ? '' : stream.getText('UTF-8')
+    if (status >= 400) {
+        throw new GradleException("HTTP ${status} from ${url}: ${response}")
+    }
+    return response
+}

@@ -1,0 +1,18 @@
+plugins {
+    id 'one.xis.plugin' version '0.10.0' apply false
+}
+
+allprojects {
+    group = 'one.xis'
+    version = '0.10.0'
+}
+
+subprojects {
+    apply plugin: 'one.xis.plugin'
+
+    java {
+        toolchain {
+            languageVersion = JavaLanguageVersion.of(21)
+        }
+    }
+}
