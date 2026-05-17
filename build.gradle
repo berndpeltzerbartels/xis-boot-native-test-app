@@ -16,3 +16,109 @@ subprojects {
         }
     }
 }
+
+ext.dockerRun = { List<String> args ->
+    var command = (['docker'] + args).collect { it.toString() }
+    var process = new ProcessBuilder(command).redirectErrorStream(true).start()
+    var output = process.inputStream.getText('UTF-8')
+    var exit = process.waitFor()
+    if (exit != 0) {
+        throw new GradleException("Docker command failed (${command.join(' ')}):\n${output}")
+    }
+}
+
+ext.dockerRm = { String containerName ->
+    new ProcessBuilder('docker', 'rm', '-f', containerName.toString())
+            .redirectErrorStream(true)
+            .start()
+            .waitFor()
+}
+
+ext.waitForTcp = { String host, int port, long timeoutMillis ->
+    var deadline = System.currentTimeMillis() + timeoutMillis
+    while (System.currentTimeMillis() < deadline) {
+        try (var socket = new Socket()) {
+            socket.connect(new InetSocketAddress(host, port), 500)
+            return
+        } catch (IOException ignored) {
+            Thread.sleep(250)
+        }
+    }
+    throw new GradleException("Service did not become reachable on ${host}:${port}")
+}
+
+ext.runNativeModelCheck = { File executable, int port, String pageId, String expected, File logFile ->
+    if (!executable.exists()) {
+        throw new GradleException("Native executable not found: ${executable}")
+    }
+    logFile.parentFile.mkdirs()
+    var process = new ProcessBuilder(executable.absolutePath, String.valueOf(port))
+            .redirectErrorStream(true)
+            .redirectOutput(ProcessBuilder.Redirect.to(logFile))
+            .start()
+    try {
+        waitForNativeServer(process, port, logFile)
+        var skeleton = httpGet("http://localhost:${port}/")
+        if (!skeleton.contains('XIS Native')) {
+            throw new GradleException("Native skeleton page did not load. Response was: ${skeleton}")
+        }
+        var model = httpPostJson("http://localhost:${port}/xis/page/model", """
+                {
+                  "clientId": "native-e2e",
+                  "pageId": "${pageId}",
+                  "pageUrl": "${pageId}",
+                  "zoneId": "Europe/Berlin",
+                  "type": "page"
+                }
+                """)
+        if (!model.contains(expected)) {
+            throw new GradleException("Native model endpoint did not return expected value '${expected}'. Response was: ${model}")
+        }
+    } finally {
+        process.destroy()
+        if (!process.waitFor(3, java.util.concurrent.TimeUnit.SECONDS)) {
+            process.destroyForcibly()
+            process.waitFor()
+        }
+    }
+}
+
+private static void waitForNativeServer(Process process, int port, File logFile) {
+    var deadline = System.currentTimeMillis() + 15_000
+    while (System.currentTimeMillis() < deadline) {
+        if (!process.isAlive()) {
+            throw new GradleException("Native server exited before it was reachable. Log:\n${logFile.text}")
+        }
+        try {
+            httpGet("http://localhost:${port}/")
+            return
+        } catch (IOException ignored) {
+            Thread.sleep(200)
+        }
+    }
+    throw new GradleException("Native server did not become reachable on port ${port}. Log:\n${logFile.text}")
+}
+
+private static String httpGet(String url) {
+    var connection = new URL(url).openConnection()
+    connection.setConnectTimeout(2_000)
+    connection.setReadTimeout(5_000)
+    return connection.inputStream.getText('UTF-8')
+}
+
+private static String httpPostJson(String url, String json) {
+    var connection = (HttpURLConnection) new URL(url).openConnection()
+    connection.setRequestMethod('POST')
+    connection.setRequestProperty('Content-Type', 'application/json; charset=UTF-8')
+    connection.setConnectTimeout(2_000)
+    connection.setReadTimeout(5_000)
+    connection.doOutput = true
+    connection.outputStream.withWriter('UTF-8') { writer -> writer << json }
+    var status = connection.responseCode
+    var stream = status >= 400 ? connection.errorStream : connection.inputStream
+    var response = stream == null ? '' : stream.getText('UTF-8')
+    if (status >= 400) {
+        throw new GradleException("HTTP ${status} from ${url}: ${response}")
+    }
+    return response
+}

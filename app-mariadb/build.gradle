@@ -1,0 +1,41 @@
+plugins {
+    id 'java'
+}
+
+dependencies {
+    implementation 'one.xis:xis-boot-native'
+    implementation 'one.xis:xis-sql'
+    implementation 'one.xis:xis-boot-native-mariadb'
+}
+
+tasks.register('nativeMariadbE2e') {
+    group = 'verification'
+    description = 'Builds the native MariaDB smoke app, starts MariaDB, and verifies the page model through HTTP.'
+    dependsOn tasks.named('xisNativeCompile')
+
+    def executableFile = layout.buildDirectory.file("native/${project.name}")
+    def port = (findProperty('nativeE2ePort') ?: '8102') as int
+    def dbPort = (findProperty('mariadbPort') ?: '53306') as int
+    def containerName = 'xis-native-mariadb-test'
+
+    doLast {
+        rootProject.ext.dockerRm(containerName)
+        rootProject.ext.dockerRun(['run', '-d', '--name', containerName,
+                   '-e', 'MARIADB_USER=xis',
+                   '-e', 'MARIADB_PASSWORD=xis',
+                   '-e', 'MARIADB_DATABASE=xis_native',
+                   '-e', 'MARIADB_ROOT_PASSWORD=xis-root',
+                   '-p', "${dbPort}:3306",
+                   'mariadb:11.4'])
+        try {
+            rootProject.ext.waitForTcp('localhost', dbPort, 45_000)
+            Thread.sleep(5_000)
+            rootProject.ext.runNativeModelCheck(executableFile.get().asFile, port,
+                    '/native-mariadb.html',
+                    'native mariadb value from database',
+                    layout.buildDirectory.file('native/native-mariadb-e2e.log').get().asFile)
+        } finally {
+            rootProject.ext.dockerRm(containerName)
+        }
+    }
+}

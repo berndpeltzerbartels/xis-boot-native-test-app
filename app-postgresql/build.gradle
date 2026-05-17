@@ -1,0 +1,40 @@
+plugins {
+    id 'java'
+}
+
+dependencies {
+    implementation 'one.xis:xis-boot-native'
+    implementation 'one.xis:xis-sql'
+    implementation 'one.xis:xis-boot-native-postgresql'
+}
+
+tasks.register('nativePostgresqlE2e') {
+    group = 'verification'
+    description = 'Builds the native PostgreSQL smoke app, starts PostgreSQL, and verifies the page model through HTTP.'
+    dependsOn tasks.named('xisNativeCompile')
+
+    def executableFile = layout.buildDirectory.file("native/${project.name}")
+    def port = (findProperty('nativeE2ePort') ?: '8101') as int
+    def dbPort = (findProperty('postgresqlPort') ?: '55432') as int
+    def containerName = 'xis-native-postgresql-test'
+
+    doLast {
+        rootProject.ext.dockerRm(containerName)
+        rootProject.ext.dockerRun(['run', '-d', '--name', containerName,
+                   '-e', 'POSTGRES_USER=xis',
+                   '-e', 'POSTGRES_PASSWORD=xis',
+                   '-e', 'POSTGRES_DB=xis_native',
+                   '-p', "${dbPort}:5432",
+                   'postgres:16-alpine'])
+        try {
+            rootProject.ext.waitForTcp('localhost', dbPort, 30_000)
+            Thread.sleep(2_000)
+            rootProject.ext.runNativeModelCheck(executableFile.get().asFile, port,
+                    '/native-postgresql.html',
+                    'native postgresql value from database',
+                    layout.buildDirectory.file('native/native-postgresql-e2e.log').get().asFile)
+        } finally {
+            rootProject.ext.dockerRm(containerName)
+        }
+    }
+}

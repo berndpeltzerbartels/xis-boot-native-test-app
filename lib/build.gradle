@@ -4,6 +4,7 @@ plugins {
 }
 
 dependencies {
+    api 'one.xis:xis-boot-native'
     api 'one.xis:xis-context'
 }
 

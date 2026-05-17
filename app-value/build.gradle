@@ -1,0 +1,23 @@
+plugins {
+    id 'java'
+}
+
+dependencies {
+    implementation 'one.xis:xis-boot-native'
+}
+
+tasks.register('nativeValueE2e') {
+    group = 'verification'
+    description = 'Builds the native @Value smoke app and verifies that mandatory properties are read at runtime.'
+    dependsOn tasks.named('xisNativeCompile')
+
+    def executableFile = layout.buildDirectory.file("native/${project.name}")
+    def port = (findProperty('nativeE2ePort') ?: '8104') as int
+
+    doLast {
+        rootProject.ext.runNativeModelCheck(executableFile.get().asFile, port,
+                '/native-value.html',
+                'native value from application properties',
+                layout.buildDirectory.file('native/native-value-e2e.log').get().asFile)
+    }
+}

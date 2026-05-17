@@ -16,4 +16,8 @@ dependencyResolutionManagement {
 
 rootProject.name = 'xis-boot-native-test-app'
 include 'app'
+include 'app-postgresql'
+include 'app-mariadb'
+include 'app-mongodb'
+include 'app-value'
 include 'lib'
