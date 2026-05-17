@@ -43,7 +43,7 @@ tasks.register('nativeCatalogE2e') {
         try {
             waitForNativeServer(process, port, outputFile)
             var skeleton = httpGet("http://localhost:${port}/")
-            if (!skeleton.contains('XIS Native Catalog Test')) {
+            if (!skeleton.contains('/bundle.min.js') || !skeleton.contains('onload="main()"')) {
                 throw new GradleException("Native skeleton page did not load. Response was: ${skeleton}")
             }
             var bundle = httpGet("http://localhost:${port}/bundle.min.js")
